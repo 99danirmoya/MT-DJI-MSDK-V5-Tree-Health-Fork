@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/card_tree_health"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="8dp"
+    app:cardCornerRadius="8dp"
+    app:cardElevation="4dp">
+    <!-- Note: strokeColor and strokeWidth are MaterialCardView specific attributes.
+         They are removed as androidx.cardview.widget.CardView does not support them directly.
+         You can simulate a stroke using a drawable background if needed. -->
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/tv_tree_id"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tree ID: 0"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/black"/>
+
+        <TextView
+            android:id="@+id/tv_health_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Status: Healthy"
+            android:textSize="16sp"
+            android:textColor="@android:color/black"/>
+
+    </LinearLayout>
+</androidx.cardview.widget.CardView>
