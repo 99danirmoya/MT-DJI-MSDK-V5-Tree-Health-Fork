@@ -87,9 +87,9 @@ class CameraStreamDetailVM : DJIViewModel() {
     private val _currentTreeId = MutableLiveData<Int>()                                             // Declare the Tree ID as a mutable live data so that the variable can communicate (it is observable) with its equal from ThesisDetailFragment
     val currentTreeId: LiveData<Int> get() = _currentTreeId                                         // Now this one is not mutable and it is just meant to be watched from the ThesisDetailFragment. The "get()" means that every time the variable is called, it returns (read-only) the value "_currentTreeId"
 
-    // hasFinishedState now managed by the ViewModel
-    private val _hasFinishedState = MutableLiveData(0) // Initialize to 0 (false)
-    val hasFinishedState: LiveData<Int> = _hasFinishedState // Expose as LiveData
+    // hasFinishedState is managed by the ViewModel. Typical setup for MutableLiveData
+    private val _hasFinishedState = MutableLiveData(0)                                        // Initialize to 0 (false)
+    val hasFinishedState: LiveData<Int> = _hasFinishedState                                         // Expose as LiveData
 
     private val visionAssistStatusListener = object :
         ICameraStreamManager.VisionAssistStatusListener {
@@ -140,67 +140,61 @@ class CameraStreamDetailVM : DJIViewModel() {
      * in the provided YUV420_888 format by the MSDK. Then, this image is converted to NV21
      */
     fun captureAndSendImageToThingsBoard() {
-        if (cameraIndex == ComponentIndexType.UNKNOWN) {
+        if (cameraIndex == ComponentIndexType.UNKNOWN) {                                            // If 'cameraIndex' is set to 'UNKNOWN', it means that the onboard drone camera system has not been properly initialized
             ToastUtils.showToast("Camera not initialized.")
-            return
+            return                                                                                  // Exits the function to avoid errors
         }
 
         ToastUtils.showToast("Capturing image...")
         LogUtils.d(THINGSBOARD_IMAGE_TAG, "Attempting to capture frame for sending.")
 
         // Request a single frame in YUV420_888 format -> Y = Iluminance, UV = Chrominance
-        MediaDataCenter.getInstance().cameraStreamManager.addFrameListener(
-            cameraIndex,
-            ICameraStreamManager.FrameFormat.YUV420_888,
-            object : ICameraStreamManager.CameraFrameListener {
-                override fun onFrame(frameData: ByteArray, offset: Int, length: Int, width: Int, height: Int, format: FrameFormat) {
-                    // Remove the listener immediately
-                    MediaDataCenter.getInstance().cameraStreamManager.removeFrameListener(this)
+        MediaDataCenter.getInstance().cameraStreamManager.addFrameListener(                         // Get an instance of the camera stream manager, which is the object that manages camera operations. 'addFrameListener' registers a listener to receive camera frames
+            cameraIndex,                                                                            // 'cameraIndex' specifies the onboard camera to use, which is reduced to the only one the Mini 3 does have
+            ICameraStreamManager.FrameFormat.YUV420_888,                                            // Request the image frame in YUV format
+            object : ICameraStreamManager.CameraFrameListener {                                     // Define an anonymous inner class that implements 'CameraFrameListener' interface. The object will be called when a new frame is available
+                override fun onFrame(frameData: ByteArray, offset: Int, length: Int, width: Int, height: Int, format: FrameFormat) {  // Callback method that gets executed when a camera frame is successfully captured. 'framedata: ByteArray' is the raw byte array containing the image data. 'offset: Int' is the offset within 'frameData' where the image data begins. 'length: Int' is the length of the image within 'frameData'. 'width: Int' is the frame width in pixels. 'height: Int' is the frame height in pixels. 'format: FrameFormat' os the format of the frame, YUV420_888
+                    MediaDataCenter.getInstance().cameraStreamManager.removeFrameListener(this)  // Remove the listener immediately to avoid getting more than a single frame
 
                     LogUtils.d(THINGSBOARD_IMAGE_TAG, "Received frame: ${width}x${height}, format: ${format.name}")
 
-                    CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            // Convert YUV420_888 to NV21 (encoding for YCrCb format)
-                            val nv21Bytes = convertYUV420_888toNV21(frameData, width, height)
-                            if (nv21Bytes == null) {
-                                withContext(Dispatchers.Main) {
+                    CoroutineScope(Dispatchers.IO).launch {                                         // Launch a Kotlin background thread to avoid blocking the application UI
+                        try {                                                                       // Use 'try' to handle possible exceptions
+                            val nv21Bytes = convertYUV420_888toNV21(frameData, width, height)       // Convert the raw YUV420_888 image to NV21 (encoding for YCrCb format, very common in Android for image processing)
+                            if (nv21Bytes == null) {                                                // If no bytes have been converted to NV21, notify the error
+                                withContext(Dispatchers.Main) {                                     // 'withContext(Dispatchers.Main)' is used to send the error from the background thread to the main thread
                                     ToastUtils.showToast("Failed to convert YUV to NV21.")
                                 }
                                 LogUtils.e(THINGSBOARD_IMAGE_TAG, "YUV to NV21 conversion failed.")
-                                return@launch
+                                return@launch                                                       // Exit the background thread
                             }
 
                             // Create YuvImage from NV21 bytes
-                            val yuvImage = YuvImage(nv21Bytes, ImageFormat.NV21, width, height, null)
-                            val out = ByteArrayOutputStream()
+                            val yuvImage = YuvImage(nv21Bytes, ImageFormat.NV21, width, height, null)  // Create a 'YuvImage' object from the NV21 byte array. This object is very suitable for Android image processing utilities. 'ImageFormat.NV21' specifies format and 'width' and 'height', the dimensions. 'null' argument is for strides, which are automatically calculated
+                            val out = ByteArrayOutputStream()                                       // Initialize 'ByteArrayOutputStream', which is used to write the compressed JPEG image data into memory
 
-                            // Calculate the target rectangle for compression, maintaining aspect ratio
-                            // The Rect here is for the source region, the compression will scale it.
-                            val resizeRect = calculateResizeRect(width, height, TARGET_WIDTH, TARGET_HEIGHT)
+                            // Calculate the target rectangle for compression, maintaining aspect ratio. The Rect here is for the source region, the compression will scale it
+                            val resizeRect = calculateResizeRect(width, height, TARGET_WIDTH, TARGET_HEIGHT)  // Determine the rectangular region of the 'YuvImage' to use for compression. It is done to ensure the image is resized to 'TARGET_WIDTH' and 'TARGET_HEIGHT' while maintaining the aspect ratio. 'Rect' defines the portion of the original image to be compressed
 
                             // Convert Y'UV image to compressed JPEG that automatically fits the given rectangle
-                            yuvImage.compressToJpeg(resizeRect, JPEG_QUALITY, out)
-                            val jpegByteArray = out.toByteArray()
-                            out.close()
+                            yuvImage.compressToJpeg(resizeRect, JPEG_QUALITY, out)                  // 'resizeRect' is the rectangle defining the portion of the YUV image to compress. 'JPEG_QUALITY' is a macro that defines the JPEG quality compression (int from 0 to 100)
+                            val jpegByteArray = out.toByteArray()                                   // Convert the contents of 'ByteArrayOutputStream' into a ByteArray containing the JPEG image data
+                            out.close()                                                             // Close the output stream, releasing its associated resources
 
                             // Base64 encode the JPEG byte array
-                            val base64Image = Base64.encodeToString(jpegByteArray, Base64.NO_WRAP)
-                            LogUtils.d(THINGSBOARD_IMAGE_TAG, "JPEG image converted and Base64 encoded. Size: ${base64Image.length / 1024} KB")
+                            val base64Image = Base64.encodeToString(jpegByteArray, Base64.NO_WRAP)  // Encode 'jpegByteArray' into a Base64 string. Base64 encoding is the key to send the image inside JSON format. 'Base64.NO_WRAP' prevents the output string from being wrapped with newline characters
+                            LogUtils.d(THINGSBOARD_IMAGE_TAG, "JPEG image converted and Base64 encoded. Size: ${base64Image.length / 1024} KB")  // By dividing the length of the image by 1024, it is transformed from bytes to kilobytes
 
-                            val bitmap: Bitmap? = BitmapFactory.decodeByteArray(jpegByteArray, 0, jpegByteArray.size)
+                            // Decode the jpegByteArray back to Bitmap object
+                            val bitmap: Bitmap? = BitmapFactory.decodeByteArray(jpegByteArray, 0, jpegByteArray.size)  // This step is crucial for the RBG decomposition and analysis
 
-                            if (bitmap != null) {
-                                var totalR = 0L // Use Long to prevent overflow for large number of pixels
-                                var totalG = 0L
-                                var totalB = 0L
-
+                            if (bitmap != null) {                                                   // If the Bitmap was successfully created, get the dimensions
                                 val width = bitmap.width
                                 val height = bitmap.height
                                 val pixels = IntArray(width * height)
-                                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+                                bitmap.getPixels(pixels, 0, width, 0, 0, width, height) // '.getPixels' gets the ARGB information of the image pixels
 
-                                val numPixels = width * height
+                                val numPixels = width * height                                      // Number of pixels of the image
 
                                 // For Median: Store all values to sort later
                                 val redValues = mutableListOf<Int>()
@@ -208,108 +202,89 @@ class CameraStreamDetailVM : DJIViewModel() {
                                 val blueValues = mutableListOf<Int>()
 
                                 // Process pixels to get RGB values
-                                for (pixel in pixels) {
+                                for (pixel in pixels) {                                             // For all the pixels of the image, get the amount of RGB from each
                                     val r = Color.red(pixel)
                                     val g = Color.green(pixel)
                                     val b = Color.blue(pixel)
 
-                                    totalR += r
-                                    totalG += g
-                                    totalB += b
-
-                                    redValues.add(r)
+                                    redValues.add(r)                                                // Add the values for each colour to each mutable list
                                     greenValues.add(g)
                                     blueValues.add(b)
                                 }
 
-                                // --- Calculate Mean ---
-                                val meanR = if (numPixels > 0) totalR.toDouble() / numPixels else 0.0
-                                val meanG = if (numPixels > 0) totalG.toDouble() / numPixels else 0.0
-                                val meanB = if (numPixels > 0) totalB.toDouble() / numPixels else 0.0
-
-                                // --- Calculate Median ---
-                                // Sorting can be computationally expensive for very large images
-                                redValues.sort()
+                                // Calculate Median
+                                redValues.sort()                                                    // Sorting can be computationally expensive for very large images, so expect a bit of delay in the application
                                 greenValues.sort()
                                 blueValues.sort()
 
-                                val medianR = if (numPixels > 0) getMedian(redValues) else 0.0
+                                val medianR = if (numPixels > 0) getMedian(redValues) else 0.0      // Get median colour for each channel only if at least pixel of each colour has been found. Assign 0.0 as default if non has been found
                                 val medianG = if (numPixels > 0) getMedian(greenValues) else 0.0
                                 val medianB = if (numPixels > 0) getMedian(blueValues) else 0.0
 
-                                // Round to a reasonable number of decimal places for payload
-                                val meanR_rounded = "%.2f".format(Locale.US, meanR).toDouble()
-                                val meanG_rounded = "%.2f".format(Locale.US, meanG).toDouble()
-                                val meanB_rounded = "%.2f".format(Locale.US, meanB).toDouble()
-
-                                val medianR_rounded = "%.2f".format(Locale.US, medianR).toDouble()
+                                val medianR_rounded = "%.2f".format(Locale.US, medianR).toDouble()  // Format the values to 2 decimal figures and convert them to double for better precision
                                 val medianG_rounded = "%.2f".format(Locale.US, medianG).toDouble()
                                 val medianB_rounded = "%.2f".format(Locale.US, medianB).toDouble()
 
-                                val sentTreeId = treeIdCounter // Store current treeId before incrementing
-                                treeIdCounter++
+                                val sentTreeId = treeIdCounter                                      // Store current treeId before incrementing for upcoming purposes
+                                treeIdCounter++                                                     // Increment it after
 
                                 // Get the current hasFinishedState value from LiveData (DO NOT TOGGLE HERE)
                                 val currentHasFinishedValue = _hasFinishedState.value ?: 0
 
+                                // Create a mutable map to form the JSON payload for ThingsBoard
                                 val payload = mutableMapOf<String, Any>(
-                                    "cameraImage" to base64Image, // Your existing image data
+                                    "cameraImage" to base64Image,                                   // Base64 image, most convinient format for JSON format
                                     "treeId" to sentTreeId,
-                                    "imageWidth" to width,
-                                    "imageHeight" to height,
-                                    "meanRed" to meanR_rounded,
-                                    "meanGreen" to meanG_rounded,
-                                    "meanBlue" to meanB_rounded,
                                     "medianRed" to medianR_rounded,
                                     "medianGreen" to medianG_rounded,
                                     "medianBlue" to medianB_rounded,
-                                    "hasFinished" to currentHasFinishedValue // Add hasFinished here
+                                    "hasFinished" to currentHasFinishedValue                        // Last 'hasFinished' status received
                                 )
 
+                                // Convert the payload map to a JSON string using Gson
                                 val jsonPayload = gson.toJson(payload)
 
+                                // Recycle the bitmap to free up memory as the frame has been correctly stored in the JSON variable
                                 bitmap.recycle()
 
-                                LogUtils.d(THINGSBOARD_IMAGE_TAG, "Calculated Avg RGB: R=%.2f, G=%.2f, B=%.2f".format(Locale.US, meanR_rounded, meanG_rounded, meanB_rounded))
                                 LogUtils.d(THINGSBOARD_IMAGE_TAG, "Calculated Median RGB: R=%.2f, G=%.2f, B=%.2f".format(Locale.US, medianR_rounded, medianG_rounded, medianB_rounded))
-
-
                                 LogUtils.d(THINGSBOARD_IMAGE_TAG, "Publishing image payload (first 100 chars): ${jsonPayload.substring(0, minOf(jsonPayload.length, 100))}...")
 
                                 // Send via HTTP POST to ThingsBoard
-                                val requestBody = jsonPayload.toRequestBody("application/json".toMediaTypeOrNull())
-                                val request = Request.Builder()
-                                    .url("https://$THINGSBOARD_HOST/$TELEMETRY_ENDPOINT")
-                                    .post(requestBody)
+                                val requestBody = jsonPayload.toRequestBody("application/json".toMediaTypeOrNull())  // Create a request body from the JSON payload with "application/json" media type
+                                val request = Request.Builder()                                     // Build the HTTP POST request
+                                    .url("https://$THINGSBOARD_HOST/$TELEMETRY_ENDPOINT")           // Set the HTTP API endpoint URL
+                                    .post(requestBody)                                              // Set the request method to POST and attach the request body
                                     .build()
 
-                                val response = httpClient.newCall(request).execute()
+                                val response = httpClient.newCall(request).execute()                // Execute the HTTP request synchronously
 
-                                withContext(Dispatchers.Main) {
-                                    if (response.isSuccessful) {
+                                withContext(Dispatchers.Main) {                                     // Switch back to the main UI thread to update the UI
+                                    if (response.isSuccessful) {                                    // If the HTTP method was executed successfully, send the corresponding notifications
                                         val successMessage =
                                             "Successfully sent image to ThingsBoard. Size: ${jpegByteArray.size / 1024} KB. treeId: ${treeIdCounter - 1}, hasFinished: $currentHasFinishedValue"
                                         LogUtils.i(THINGSBOARD_IMAGE_TAG, successMessage)
                                         ToastUtils.showToast(successMessage)
                                         // Post the updated treeId to LiveData on successful send
-                                        _currentTreeId.postValue(sentTreeId)                            // Posted on ThesisDetailFragment
-                                    } else {
+                                        _currentTreeId.postValue(sentTreeId)                        // Posted on ThesisDetailFragment
+                                    } else {                                                        // In case it retrieved any error, notify it, too
                                         val errorMessage =
                                             "Failed to send image: ${response.code} - ${response.message} (Body: ${response.body?.string()})"
                                         LogUtils.e(THINGSBOARD_IMAGE_TAG, errorMessage)
                                         ToastUtils.showToast(errorMessage)
                                     }
                                 }
-                            } else {
-                                LogUtils.e(
+                            } else {                                                                // In case the Bitmap is empty
+                                LogUtils.e(                                                         // Notify it in the log
                                     THINGSBOARD_IMAGE_TAG,
                                     "Failed to decode image from byte array."
                                 )
-                                withContext(Dispatchers.Main) {
+                                withContext(Dispatchers.Main) {                                     // Send the information back to the main thread to pop a toast message
                                     ToastUtils.showToast("Failed to process image for color analysis.")
                                 }
                             }
-                        } catch (e: Exception) {
+                        // EXCEPTIONS
+                        } catch (e: Exception) {                                                    // Exception for the image conversion
                             withContext(Dispatchers.Main) {
                                 val errorMessage = "Error processing or sending image: ${e.message}"
                                 LogUtils.e(THINGSBOARD_IMAGE_TAG, errorMessage, e)
@@ -345,45 +320,41 @@ class CameraStreamDetailVM : DJIViewModel() {
      * @return NV21 byte array, or null if conversion fails.
      */
     private fun convertYUV420_888toNV21(yuv420Bytes: ByteArray, width: Int, height: Int): ByteArray? {
-        if (yuv420Bytes.isEmpty() || width <= 0 || height <= 0) {
-            return null
+        if (yuv420Bytes.isEmpty() || width <= 0 || height <= 0) {                                   // Checks if the input YUV byte array is empty or if the image dimensions are 0
+            return null                                                                             // And returns null to quickly exit the function to avoid resources consumption and errors
         }
 
-        // NV21 format: Y plane, then interleaved VU plane.
-        // Size = (width * height) for Y + (width * height / 2) for UV
-        val nv21Size = width * height + width * height / 2
-        val nv21 = ByteArray(nv21Size)
+        // NV21 format: Y plane, then interleaved VU plane
+        val nv21Size = width * height + width * height / 2                                          // Size = (width * height) for Y + (width * height / 2) for UV
+        val nv21 = ByteArray(nv21Size)                                                              // Create a byte array to store te NV21 image information with the corresponding size
 
-        // Copy Y plane
-        // Assume the Y plane is at the beginning of the frameData and its size is width * height
-        val ySize = width * height
-        System.arraycopy(yuv420Bytes, 0, nv21, 0, ySize)
+        // Copy Y plane. Assume the Y plane is at the beginning of the frameData and its size is width * height
+        val ySize = width * height                                                                  // Remember, Y plane is luminance
+        System.arraycopy(yuv420Bytes, 0, nv21, 0, ySize)                                            // 'yuv420bytes' is the source array, '0' is the offset, so from the very beginning of the array, 'nv21' is the destination array, '0' is the offset for the destination array, again, from the very beginning and 'ySize' is the amount of bytes to copy
 
-        // Copy UV plane (interleaved V then U for NV21)
-        // This is the tricky part. DJI's YUV420_888 might have U then V, or V then U, or separate.
-        // We'll assume the most common case for YUV420 planar where U and V follow Y,
+        // Copy UV plane (interleaved 'V' then 'U' for NV21)
+        // This is the tricky part. DJI's YUV420_888 might have 'U' then 'V', or 'V' then 'U', or separate.
+        // It is assumed the most common case for YUV420 planar, where 'U' and 'V' follow 'Y',
         // and try to interleave them for NV21.
-        // If the artifacts persist, this section needs deep debugging based on DJI's exact plane structure.
-
-        // A common YUV420_888 arrangement puts U and V planes after Y.
-        // U plane starts at ySize, V plane starts at ySize + (ySize / 4)
-        // Each UV plane is (width/2) * (height/2)
-        val uvSize = width * height / 4 // Size of one chrominance plane (U or V)
-        val uOffset = ySize
-        val vOffset = ySize + uvSize
+        // A common YUV420_888 arrangement puts 'U' and 'V' planes after 'Y'.
+        // 'U' plane starts at ySize, 'V' plane starts at "ySize + (ySize / 4)"
+        // Each UV plane is "(width/2) * (height/2)"
+        val uvSize = width * height / 4                                                             // Size of one chrominance plane (U or V)
+        val uOffset = ySize                                                                         // Define the beginning of the 'U' plane assuming its first byte index is right after the 'Y' one
+        val vOffset = ySize + uvSize                                                                // Define the beginning of the 'V' plane assuming its first byte index is right after the 'U' one
 
         // Check if yuv420Bytes has enough data for U and V planes
-        if (yuv420Bytes.size < vOffset + uvSize) {
+        if (yuv420Bytes.size < vOffset + uvSize) {                                                  // The YUV byte array must be coherent according to the established dimensions
             LogUtils.e(THINGSBOARD_IMAGE_TAG, "YUV420_888 byte array is too small for expected U and V planes.")
-            return null
+            return null                                                                             // Again, exit the function returning null
         }
 
-        var nv21_uv_idx = ySize // Start writing UV data in NV21 after the Y plane
-        for (i in 0 until uvSize) {
-            // NV21 is V then U interleaved. So, copy V first, then U.
-            // If DJI's data is U then V, swap these: yuv420Bytes[vOffset + i] and yuv420Bytes[uOffset + i]
-            nv21[nv21_uv_idx++] = yuv420Bytes[vOffset + i] // V
-            nv21[nv21_uv_idx++] = yuv420Bytes[uOffset + i] // U
+        // Start writing UV data in NV21 after the Y plane
+        var nv21_uv_idx = ySize                                                                     // Initialize a variable for the UV index to where the bytes should be written in the 'nv21' output byte array. 'Y' plane has already been copied, so it starts right after
+        for (i in 0 until uvSize) {                                                           // Iterate the whole 'UV' plane to process all the chrominance information
+            // NV21 is V then U interleaved. So, copy V first, then U
+            nv21[nv21_uv_idx++] = yuv420Bytes[vOffset + i]                                          // 'V' first. "nv21[nv21_uv_idx]" writes a byte to the current position in the nv21 array, "yuv420Bytes[vOffset + i]" reads a byte from the 'V' plane of the input 'yuv420Bytes' at the current i offset, "nv21_uv_idx++" post-increments 'nv21_uv_idx'. This effectively moves the pointer forward by one byte in the 'nv21' array. This copies the 'V' component
+            nv21[nv21_uv_idx++] = yuv420Bytes[uOffset + i]                                          // 'U' after 'V'. Same working method as for 'V' plane
         }
 
         return nv21
@@ -405,12 +376,15 @@ class CameraStreamDetailVM : DJIViewModel() {
         return Rect(0, 0, originalWidth, originalHeight)
     }
 
+    /**
+     * Calculates the median for a list of values in double format
+     */
     private fun getMedian(list: List<Int>): Double {
-        if (list.isEmpty()) return 0.0
-        val size = list.size
-        return if (size % 2 == 1) { // Odd number of elements
+        if (list.isEmpty()) return 0.0                                                              // Return 0.0 by default if the list is empty
+        val size = list.size                                                                        // Compute the list size to know if it is even or odd
+        return if (size % 2 == 1) {                                                                 // Odd number of elements
             list[size / 2].toDouble()
-        } else { // Even number of elements
+        } else {                                                                                    // Even number of elements
             (list[size / 2 - 1] + list[size / 2]).toDouble() / 2.0
         }
     }
