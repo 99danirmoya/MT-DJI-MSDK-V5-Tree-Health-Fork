@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.fragment.app.commit // Required import for fragment transactions
+import com.google.android.material.floatingactionbutton.FloatingActionButton // Import for FloatingActionButton
 import com.google.gson.Gson
 import dji.sampleV5.aircraft.R
 import dji.sampleV5.aircraft.views.MSDKInfoFragment // Assuming this is your base class, adjust if needed
@@ -26,6 +27,7 @@ class ThesisTreeReport : AppCompatActivity() {
 
     private lateinit var recyclerView: RecyclerView
     private lateinit var treeHealthAdapter: TreeHealthAdapter
+    private lateinit var refreshFab: FloatingActionButton // Declare the FloatingActionButton
 
     private val client = OkHttpClient()
     private val gson = Gson()
@@ -48,6 +50,13 @@ class ThesisTreeReport : AppCompatActivity() {
         recyclerView.layoutManager = LinearLayoutManager(this)
         treeHealthAdapter = TreeHealthAdapter(emptyList())
         recyclerView.adapter = treeHealthAdapter
+
+        // Initialize Floating Action Button and set its click listener
+        refreshFab = findViewById(R.id.fab_refresh)
+        refreshFab.setOnClickListener {
+            Toast.makeText(this, "Refreshing report...", Toast.LENGTH_SHORT).show()
+            fetchThingsBoardReport() // Call the fetch function to refresh the data
+        }
 
         // Fetch the report from ThingsBoard when the activity is created
         fetchThingsBoardReport()
@@ -84,16 +93,16 @@ class ThesisTreeReport : AppCompatActivity() {
                 // Execute the request and get the response
                 val response = client.newCall(request).execute()
 
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string()
-                    if (responseBody != null) {
-                        // Parse the JSON response.
-                        // Expected format: {"shared": {"report":"Healthy,Sick,Healthy,..."}}
-                        val attributesResponse = gson.fromJson(responseBody, Map::class.java) as Map<String, Any>
-                        val sharedAttributes = attributesResponse["shared"] as? Map<String, Any>
-                        val reportContent = sharedAttributes?.get("report") as? String
+                withContext(Dispatchers.Main) { // Switch to Main thread to update UI
+                    if (response.isSuccessful) {
+                        val responseBody = response.body?.string()
+                        if (responseBody != null) {
+                            // Parse the JSON response.
+                            // Expected format: {"shared": {"report":"Healthy,Sick,Healthy,..."}}
+                            val attributesResponse = gson.fromJson(responseBody, Map::class.java) as Map<String, Any>
+                            val sharedAttributes = attributesResponse["shared"] as? Map<String, Any>
+                            val reportContent = sharedAttributes?.get("report") as? String
 
-                        withContext(Dispatchers.Main) {
                             if (!reportContent.isNullOrBlank()) {
                                 // Split the health status string by comma
                                 val healthStatuses = reportContent.split(",").filter { it.isNotBlank() }
@@ -116,15 +125,11 @@ class ThesisTreeReport : AppCompatActivity() {
                                 Toast.makeText(this@ThesisTreeReport, "Report attribute is empty or not found in ThingsBoard.", Toast.LENGTH_LONG).show()
                                 treeHealthAdapter.updateData(emptyList()) // Clear the RecyclerView
                             }
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) {
+                        } else {
                             Toast.makeText(this@ThesisTreeReport, "ThingsBoard response body is null.", Toast.LENGTH_LONG).show()
                             treeHealthAdapter.updateData(emptyList())
                         }
-                    }
-                } else {
-                    withContext(Dispatchers.Main) {
+                    } else {
                         val errorMessage = "Failed to fetch report: ${response.code} ${response.message}"
                         Toast.makeText(this@ThesisTreeReport, errorMessage, Toast.LENGTH_LONG).show()
                         treeHealthAdapter.updateData(emptyList()) // Clear the RecyclerView on error
